@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   Check, CheckCircle2, GripVertical, ListChecks, MoreHorizontal, Plus,
-  Search, Settings2, Trash2, X
+  Search, Settings2, Trash2, Upload, Download, Wrench, X
 } from 'lucide-react'
 import './styles.css'
 
@@ -67,8 +67,73 @@ function App() {
   const [isAdding, setIsAdding] = useState(false)
   const [newTask, setNewTask] = useState({ title: '', category: 'General' })
   const [editingStep, setEditingStep] = useState(null)
+  const [saveStatus, setSaveStatus] = useState('Gemt lokalt')
+  const [storageFileName, setStorageFileName] = useState('')
+  const fileHandle = useRef(null)
+  const importInput = useRef(null)
 
-  useEffect(() => localStorage.setItem('workshop-tasks', JSON.stringify(tasks)), [tasks])
+  useEffect(() => {
+    localStorage.setItem('workshop-tasks', JSON.stringify(tasks))
+    if (!fileHandle.current) return
+    setSaveStatus('Gemmer...')
+    const timer = setTimeout(async () => {
+      try {
+        const writable = await fileHandle.current.createWritable()
+        await writable.write(JSON.stringify({ version: 1, updatedAt: new Date().toISOString(), tasks }, null, 2))
+        await writable.close()
+        setSaveStatus('Gemt i fil')
+      } catch {
+        setSaveStatus('Kunne ikke gemme filen')
+      }
+    }, 700)
+    return () => clearTimeout(timer)
+  }, [tasks])
+
+  const fileData = () => JSON.stringify({ version: 1, updatedAt: new Date().toISOString(), tasks }, null, 2)
+  const downloadJson = (content, name = 'bil-arbejdsplaner.json') => {
+    const url = URL.createObjectURL(new Blob([content], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = name
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+  const chooseStorageFile = async () => {
+    if (!window.showSaveFilePicker) {
+      downloadJson(fileData())
+      setSaveStatus('Eksporteret som fil')
+      return
+    }
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: 'bil-arbejdsplaner.json',
+        types: [{ description: 'JSON-fil', accept: { 'application/json': ['.json'] } }]
+      })
+      fileHandle.current = handle
+      setStorageFileName(handle.name)
+      const writable = await handle.createWritable()
+      await writable.write(fileData())
+      await writable.close()
+      setSaveStatus('Gemt i fil')
+    } catch (error) {
+      if (error.name !== 'AbortError') setSaveStatus('Kunne ikke vælge fil')
+    }
+  }
+  const importJson = async event => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    try {
+      const data = JSON.parse(await file.text())
+      if (!Array.isArray(data.tasks)) throw new Error('Invalid workplan file')
+      setTasks(data.tasks)
+      setSelectedId(data.tasks[0]?.id || '')
+      setStorageFileName(file.name)
+      setSaveStatus('Importeret')
+    } catch {
+      setSaveStatus('Ugyldig JSON-fil')
+    }
+    event.target.value = ''
+  }
 
   const selected = tasks.find(task => task.id === selectedId) || tasks[0]
   const filteredTasks = useMemo(() => tasks.filter(task => `${task.title} ${task.category}`.toLowerCase().includes(query.toLowerCase())), [tasks, query])
@@ -112,6 +177,15 @@ function App() {
               </button>
             })}
             {filteredTasks.length === 0 && <div className="empty-search">Ingen arbejdsplaner matcher din søgning.</div>}
+          </div>
+          <div className="storage-panel">
+            <div className="storage-heading"><span><strong>Filopbevaring</strong><small>{storageFileName || 'Kun gemt i denne browser'}</small></span><span className={saveStatus.includes('Kunne') || saveStatus.includes('Ugyldig') ? 'save-status error' : 'save-status'}>{saveStatus}</span></div>
+            <div className="storage-actions">
+              <button onClick={chooseStorageFile}><Wrench size={14} /> Vælg JSON-fil</button>
+              <button onClick={() => downloadJson(fileData())}><Download size={14} /> Eksportér</button>
+              <button onClick={() => importInput.current?.click()}><Upload size={14} /> Importér</button>
+              <input ref={importInput} type="file" accept=".json,application/json" onChange={importJson} hidden />
+            </div>
           </div>
           <div className="sidebar-footer"><button><Settings2 size={17} /> Indstillinger</button><span>v0.1 prototype</span></div>
         </aside>
